@@ -56,13 +56,13 @@ def fetch_page(url: str) -> str | None:
     # Try ScraperAPI first (bypasses blocking)
     if SCRAPER_API_KEY:
         scraper_url = (
-            f"http://api.scraperapi.com"
+            f"https://api.scraperapi.com/"
             f"?api_key={SCRAPER_API_KEY}"
             f"&url={requests.utils.quote(url, safe='')}"
             f"&render=false"
         )
         try:
-            resp = requests.get(scraper_url, timeout=60)
+            resp = requests.get(scraper_url, params=params, timeout=60)
             resp.raise_for_status()
             log.info("Fetched via ScraperAPI successfully.")
             return resp.text
