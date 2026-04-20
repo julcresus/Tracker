@@ -11,6 +11,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # fanSALE URL for Eurovision 2026 Grand Final
 FANSALE_URL = "https://www.fansale.at/fansale/tickets/musik/eurovision-song-contest/"
 
+# ScraperAPI key — sign up free at https://www.scraperapi.com
+# Add as SCRAPER_API_KEY environment variable in Railway
+SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY")
+
 # How often to check (in seconds)
 CHECK_INTERVAL = 60  # every minute
 
@@ -47,8 +51,25 @@ def send_telegram(message: str):
         log.error(f"Failed to send Telegram message: {e}")
 
 
-def fetch_page(url: str, timeout: int = 30) -> str | None:
-    """Fetch a page with realistic browser headers, retrying once on failure."""
+def fetch_page(url: str) -> str | None:
+    """Fetch a page via ScraperAPI if available, otherwise direct."""
+    # Try ScraperAPI first (bypasses blocking)
+    if SCRAPER_API_KEY:
+        scraper_url = (
+            f"http://api.scraperapi.com"
+            f"?api_key={SCRAPER_API_KEY}"
+            f"&url={requests.utils.quote(url, safe='')}"
+            f"&render=false"
+        )
+        try:
+            resp = requests.get(scraper_url, timeout=60)
+            resp.raise_for_status()
+            log.info("Fetched via ScraperAPI successfully.")
+            return resp.text
+        except Exception as e:
+            log.warning(f"ScraperAPI fetch failed: {e}. Falling back to direct.")
+
+    # Direct fetch fallback
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -57,19 +78,13 @@ def fetch_page(url: str, timeout: int = 30) -> str | None:
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-GB,en;q=0.9,de;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
     }
-    session = requests.Session()
-    session.headers.update(headers)
-
     for attempt in range(1, 3):
         try:
-            resp = session.get(url, timeout=timeout)
+            resp = requests.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
-            log.info(f"Fetched page successfully (attempt {attempt}).")
+            log.info(f"Fetched directly (attempt {attempt}).")
             return resp.text
         except requests.exceptions.Timeout:
             log.warning(f"Timeout on attempt {attempt}. Retrying in 10s...")
@@ -82,22 +97,6 @@ def fetch_page(url: str, timeout: int = 30) -> str | None:
     return None
 
 
-def fetch_listings() -> set:
-    """Fetch current ticket listings from fanSALE."""
-    html = fetch_page(FANSALE_URL)
-    if not html:
-        return set()
-
-    soup = BeautifulSoup(html, "lxml")
-    listings = set()
-    for tag in soup.find_all(["li", "div", "a", "span"]):
-        text = tag.get_text(strip=True).lower()
-        if len(text) > 5 and any(kw in text for kw in KEYWORDS):
-            listings.add(text[:200])
-
-    return listings
-
-
 def check():
     """Check for new listings and notify if found."""
     global last_listings
@@ -108,7 +107,6 @@ def check():
         log.warning("Could not reach fanSALE — will try again next cycle.")
         return
 
-    # Check raw page text for any Grand Final mention
     page_text = html.lower()
     found_keywords = [kw for kw in KEYWORDS if kw in page_text]
     if found_keywords:
@@ -145,6 +143,10 @@ def check():
 
 def main():
     log.info("🚀 fanSALE Eurovision ticket monitor started.")
+    if SCRAPER_API_KEY:
+        log.info("ScraperAPI key detected — will use proxy for fetching.")
+    else:
+        log.warning("No SCRAPER_API_KEY set — fetching directly (may be blocked).")
     send_telegram(
         "✅ <b>Eurovision fanSALE monitor is running!</b>\n"
         "You'll be notified here when Grand Final tickets appear.\n\n"
