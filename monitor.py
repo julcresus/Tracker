@@ -56,7 +56,7 @@ def fetch_page(url: str) -> str | None:
     # Try ScraperAPI first (bypasses blocking)
     if SCRAPER_API_KEY:
         scraper_url = (
-            f"https://api.scraperapi.com/"
+            f"https://api.scraperapi.com"
             f"?api_key={SCRAPER_API_KEY}"
             f"&url={requests.utils.quote(url, safe='')}"
             f"&render=false"
