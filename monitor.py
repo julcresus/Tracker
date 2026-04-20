@@ -62,7 +62,7 @@ def fetch_page(url: str) -> str | None:
             f"&render=false"
         )
         try:
-            resp = requests.get(scraper_url, params=params, timeout=60)
+            resp = requests.get(scraper_url, timeout=60)
             resp.raise_for_status()
             log.info("Fetched via ScraperAPI successfully.")
             return resp.text
