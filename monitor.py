@@ -47,30 +47,53 @@ def send_telegram(message: str):
         log.error(f"Failed to send Telegram message: {e}")
 
 
-def fetch_listings() -> set:
-    """Fetch current ticket listings from fanSALE."""
+def fetch_page(url: str, timeout: int = 30) -> str | None:
+    """Fetch a page with realistic browser headers, retrying once on failure."""
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept-Language": "en-GB,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9,de;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
     }
-    try:
-        resp = requests.get(FANSALE_URL, headers=headers, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        log.error(f"Failed to fetch fanSALE page: {e}")
+    session = requests.Session()
+    session.headers.update(headers)
+
+    for attempt in range(1, 3):
+        try:
+            resp = session.get(url, timeout=timeout)
+            resp.raise_for_status()
+            log.info(f"Fetched page successfully (attempt {attempt}).")
+            return resp.text
+        except requests.exceptions.Timeout:
+            log.warning(f"Timeout on attempt {attempt}. Retrying in 10s...")
+            time.sleep(10)
+        except Exception as e:
+            log.error(f"Fetch error on attempt {attempt}: {e}")
+            time.sleep(10)
+
+    log.error("All fetch attempts failed.")
+    return None
+
+
+def fetch_listings() -> set:
+    """Fetch current ticket listings from fanSALE."""
+    html = fetch_page(FANSALE_URL)
+    if not html:
         return set()
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Look for listing items — fanSALE uses <li> or <div> elements with ticket info
+    soup = BeautifulSoup(html, "lxml")
     listings = set()
-    for tag in soup.find_all(["li", "div", "a"], string=True):
+    for tag in soup.find_all(["li", "div", "a", "span"]):
         text = tag.get_text(strip=True).lower()
-        if any(kw in text for kw in KEYWORDS):
-            listings.add(text[:200])  # store first 200 chars as identifier
+        if len(text) > 5 and any(kw in text for kw in KEYWORDS):
+            listings.add(text[:200])
 
     return listings
 
@@ -79,24 +102,28 @@ def check():
     """Check for new listings and notify if found."""
     global last_listings
     log.info(f"Checking fanSALE: {FANSALE_URL}")
-    current = fetch_listings()
+
+    html = fetch_page(FANSALE_URL)
+    if html is None:
+        log.warning("Could not reach fanSALE — will try again next cycle.")
+        return
+
+    # Check raw page text for any Grand Final mention
+    page_text = html.lower()
+    found_keywords = [kw for kw in KEYWORDS if kw in page_text]
+    if found_keywords:
+        log.info(f"Keywords found in page: {found_keywords}")
+
+    soup = BeautifulSoup(html, "lxml")
+    current = set()
+    for tag in soup.find_all(["li", "div", "a", "span"]):
+        text = tag.get_text(strip=True).lower()
+        if len(text) > 5 and any(kw in text for kw in KEYWORDS):
+            current.add(text[:200])
 
     if not current:
-        log.info("No matching listings found (or page structure changed).")
-        # Also notify if the page itself mentions availability keywords
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(FANSALE_URL, headers=headers, timeout=15)
-            page_text = resp.text.lower()
-            if any(kw in page_text for kw in KEYWORDS):
-                new_msg = (
-                    "🎟 <b>Eurovision 2026 Grand Final</b>\n\n"
-                    "Something matching 'Grand Final' appeared on fanSALE!\n\n"
-                    f"👉 <a href='{FANSALE_URL}'>Check fanSALE now</a>"
-                )
-                send_telegram(new_msg)
-        except Exception as e:
-            log.error(f"Secondary check failed: {e}")
+        log.info("No matching listings found this cycle.")
+        last_listings = current
         return
 
     new_listings = current - last_listings
@@ -106,7 +133,7 @@ def check():
             f"🎟 <b>Eurovision 2026 Grand Final tickets on fanSALE!</b>\n\n"
             f"Found <b>{len(new_listings)}</b> new listing(s):\n\n"
         )
-        for item in list(new_listings)[:5]:  # show up to 5
+        for item in list(new_listings)[:5]:
             message += f"• {item[:100]}\n"
         message += f"\n👉 <a href='{FANSALE_URL}'>Check fanSALE now</a>"
         send_telegram(message)
